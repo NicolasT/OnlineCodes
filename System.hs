@@ -9,15 +9,24 @@ module System(
 import Rhs
 import Data.List (sortBy)
 
+import Data.Vector (Vector)
+import qualified Data.Vector as V
+import qualified Data.Vector.Generic as GV
+import qualified Data.Vector.Generic.Mutable as MGV
+import qualified Data.Vector.Unboxed as UV
+
 import Data.IntSet (IntSet)
 import qualified Data.IntSet as IS
 
 type Row = IntSet
 
-get :: [a] -> Int -> a
-get row i = row !! i
-set :: [a] -> Int -> a -> [a]
-set row i e = zipWith (\ rj j ->if j == i then e else rj) row [0..]
+get :: Vector a -> Int -> a
+get = (V.!)
+{-# INLINE get #-}
+-- TODO This most likely leaks space
+set :: Vector a -> Int -> a -> Vector a
+set v i e = (V.//) v [(i, e)]
+{-# INLINE set #-}
 
 degree :: Row -> Int
 degree = IS.size
@@ -31,37 +40,23 @@ sub a b k = IS.filter (\v -> v >= k) rest
   where
     rest = (a `IS.union` b) `IS.difference` (a `IS.intersection` b)
 
-{-
-sub rowa rowb k =
-  zipWith3 subOne rowa rowb [0..]
-  where
-    xor True  True  = False
-    xor False False = False
-    xor _     _     = True
-    
-    subOne aj bj j =
-      if j < k 
-      then False
-      else xor aj bj
--}
-
 data {- (RhsC rhs) => -} System rhs = S {
-  sA :: [Row],      -- matrix A
-  sB :: [rhs],      -- vector B (right hand side)
+  sA :: Vector Row,      -- matrix A
+  sB :: Vector rhs,      -- vector B (right hand side)
   sC :: Int,        -- number of columns (unknowns)
   sR :: Int,        -- number of rows
-  sP :: [Int],      -- permutation, tracks swapping of rows
+  sP :: UV.Vector Int,      -- permutation, tracks swapping of rows
   sN :: Int,        -- index of next column that needs to be used
   sS :: Maybe [rhs] -- solution to the problem, if any
   } deriving(Show)
          
 makeSystem :: Int -> System rhs
 makeSystem nC = S { 
-  sA = [],
-  sB = [],
+  sA = V.empty,
+  sB = V.empty,
   sC = nC,
   sR = 0,
-  sP = [],
+  sP = UV.empty,
   sN = 0,
   sS = Nothing
   }
@@ -77,7 +72,7 @@ findBestPivot s i =
       then best
       else loop best' (j+1)
         where
-          aj = a !! j
+          aj = (V.!) a j
           best' =
             if IS.member i aj
             then
@@ -88,20 +83,15 @@ findBestPivot s i =
             else
               best
 
-swap :: [a] -> Int -> Int -> [a]
-swap a i j = 
-  loop [] 0 a
+swap :: GV.Vector v a => v a -> Int -> Int -> v a
+swap v i j = GV.modify act v
   where
-    ai = a !! i
-    aj = a !! j
-    loop acc _ []     = reverse acc
-    loop acc k (ak:as) = loop acc' (k+1) as
-      where
-        e | k == i = aj
-          | k == j = ai
-          | otherwise = ak
-        acc' = e : acc
-        
+    act mv = do
+        vi <- GV.indexM v i
+        vj <- GV.indexM v j
+        MGV.write mv i vj
+        MGV.write mv j vi
+
         
 swapRows :: System rhs -> Int -> Int -> System rhs
 swapRows s i j =
@@ -176,6 +166,7 @@ backSubstitute s =
       where 
         aj = get (sA s) j
         bj = get (sB s) j
+        -- TODO Rework without intermediate lists
         aj' = [IS.member i aj | i <- [0 ..]]
         xj = foldl (\ acc (xk,ak) -> if ak then acc -: xk else acc) bj (zip xs (drop (j+1) aj'))
         xs' = xj : xs
@@ -190,14 +181,14 @@ unpermute ps xs =
 solve :: RhsC rhs => System rhs -> System rhs
 solve s = 
   case toR (Ok s) of
-    Ok s'     -> s' { sS = Just (unpermute (sP s) (backSubstitute s')) }
+    Ok s'     -> s' { sS = Just (unpermute (UV.toList $ sP s) (backSubstitute s')) }
     Stuck s' _ -> s'
       
   
 addRow :: System rhs -> Row -> rhs -> System rhs
 addRow s r b = s { 
-  sA = sA s ++ [r],
-  sB = sB s ++ [b],
+  sA = V.snoc (sA s) r,
+  sB = V.snoc (sB s) b,
   sR = sR s + 1,
-  sP = sP s ++ [sR s],
+  sP = UV.snoc (sP s) (sR s),
   sN = 0}
