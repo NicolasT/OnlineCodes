@@ -14,7 +14,8 @@ import Online
 import Prng
 import qualified System
 
-
+import Data.IntSet (IntSet)
+import qualified Data.IntSet as IS
 
 data Decoder = Decoder {
   decoderS :: System.System MB, 
@@ -35,9 +36,6 @@ set as i a = map (\ (ak,k) -> if k == i then a else ak) (zip as [0..])
 add2List :: [[a]] -> Int -> a -> [[a]]
 add2List ass i a = set ass i (a : as) where as = ass !! i
                                             
-toRow :: [Int] -> Int -> [Bool] 
-toRow set n = map (\i -> elem i set) [0..n]
-  
 makeAuxSets :: [[Int]] -> Int -> [[Int]]
 makeAuxSets aIs n = 
   foldl (\ ass (mis, i) -> addQs ass (mis,i)) (replicate n []) z
@@ -45,7 +43,6 @@ makeAuxSets aIs n =
       addQs ass (qs,i) = foldl (\ ass q -> add2List ass q i) ass qs
       z = zip aIs [0..]
 
-    
 addAuxEquations :: System.System MB -> Online -> System.System MB
 addAuxEquations sol0 onl = 
   foldl (\ sol row -> System.addRow sol row rhs0) sol0 auxRows
@@ -56,7 +53,7 @@ addAuxEquations sol0 onl =
     (auxIs, r1) = auxIndices onl r0 -- [[49,2,12],[54,50,17], ... ]]
     nAux = onlineNAux onl
     auxSets =   makeAuxSets auxIs nAux
-    auxRows = map (\ set -> toRow set nC) auxSets
+    auxRows = map IS.fromList auxSets
 
 
 
@@ -78,7 +75,7 @@ receive dec seed rhs = dec { decoderS = sys'}
     sys' = System.addRow sys indicesAsRow rhs
     c = System.sC sys
     indices = selectIndices (decoderO dec) seed
-    indicesAsRow = map (\ i -> elem i indices) [0..c]
+    indicesAsRow = IS.fromList indices
 
 
 

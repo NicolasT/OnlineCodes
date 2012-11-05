@@ -9,13 +9,29 @@ module System(
 import Rhs
 import Data.List (sortBy)
 
-type Row = [Bool]
+import Data.IntSet (IntSet)
+import qualified Data.IntSet as IS
 
+type Row = IntSet
+
+get :: [a] -> Int -> a
 get row i = row !! i
+set :: [a] -> Int -> a -> [a]
 set row i e = zipWith (\ rj j ->if j == i then e else rj) row [0..]
 
-degree row = foldl (\ acc e -> if e then acc + 1 else acc) 0 row
-  
+degree :: Row -> Int
+degree = IS.size
+
+-- 'sub' takes 2 rows and an integer
+-- It returns a row which does not contain any index below the given
+-- integer, and otherwise, for every index in the given rows, this index if
+-- it's present in only one of these rows.
+sub :: Row -> Row -> Int -> Row
+sub a b k = IS.filter (\v -> v >= k) rest
+  where
+    rest = (a `IS.union` b) `IS.difference` (a `IS.intersection` b)
+
+{-
 sub rowa rowb k =
   zipWith3 subOne rowa rowb [0..]
   where
@@ -27,7 +43,8 @@ sub rowa rowb k =
       if j < k 
       then False
       else xor aj bj
-      
+-}
+
 data {- (RhsC rhs) => -} System rhs = S {
   sA :: [Row],      -- matrix A
   sB :: [rhs],      -- vector B (right hand side)
@@ -50,38 +67,39 @@ makeSystem nC = S {
   }
                 
          
-
+findBestPivot :: System rhs -> Int -> Maybe (Int, Int)
 findBestPivot s i =  
   loop Nothing i
   where
     a = sA s
     loop best j =
-      if j == (sR s)
+      if j == sR s
       then best
       else loop best' (j+1)
         where
           aj = a !! j
           best' =
-            if get aj i 
+            if IS.member i aj
             then
               let d = degree aj in
               case best of
-                Just (bj,bd) | bd <= d -> best
+                Just (_, bd) | bd <= d -> best
                 _                      -> Just (j,d)
             else
               best
 
+swap :: [a] -> Int -> Int -> [a]
 swap a i j = 
   loop [] 0 a
   where
     ai = a !! i
     aj = a !! j
-    loop acc k []     = reverse acc
+    loop acc _ []     = reverse acc
     loop acc k (ak:as) = loop acc' (k+1) as
       where
-        e = if k == i then aj
-            else if k == j then ai
-                 else ak
+        e | k == i = aj
+          | k == j = ai
+          | otherwise = ak
         acc' = e : acc
         
         
@@ -110,42 +128,44 @@ makeZeroes s i =
     ai = get (sA s) i
     bi = get (sB s) i
     r = sR s
-    loop s j =
+    loop s' j =
       if j == r 
-      then s { sN = i + 1}
+      then s' { sN = i + 1}
       else
-        loop s' (j+1)
+        loop s'' (j+1)
         where
           aj' = sub aj ai i
-          bj  = get (sB s) j
+          bj  = get (sB s') j
           bj' = bj -: bi 
-          aj = get (sA s) j
-          s' = if get aj i
-               then setRow s j aj' bj'
-               else s
+          aj = get (sA s') j
+          s'' = if IS.member i aj
+               then setRow s' j aj' bj'
+               else s'
 
 data SS rhs = 
   Ok (System rhs)
   | Stuck (System rhs) Int
     deriving(Show)
 
-cols (Ok s) = (sC s)
-cols (Stuck s _) = (sC s)
+cols :: SS rhs -> Int
+cols (Ok s) = sC s
+cols (Stuck s _) = sC s
 
+reduceBelow :: Rhs.RhsC rhs => System rhs -> Int -> SS rhs
 reduceBelow s i = 
   case findBestPivot s i of
     Nothing -> Stuck s i
-    Just(p,d) -> Ok (makeZeroes s' i)
-      where s' = if p ==i then s else (swapRows s i p)
+    Just(p, _) -> Ok (makeZeroes s' i)
+      where s' = if p ==i then s else swapRows s i p
           
 
 toR :: RhsC rhs => SS rhs -> SS rhs
 toR ss = -- transform s into an equivalent right triangle matrix
   loop ss 0 
     where
-      loop ss i | i == (cols ss) = ss
+      loop ss' i | i == cols ss' = ss'
       loop (Ok s) i = loop (reduceBelow s i) (i+1)
-      loop ss _ = ss
+      loop ss' _ = ss'
 
 backSubstitute :: RhsC rhs => System rhs -> [rhs]
 backSubstitute s =
@@ -156,29 +176,28 @@ backSubstitute s =
       where 
         aj = get (sA s) j
         bj = get (sB s) j
-        xj = foldl (\ acc (xk,ak) -> if ak then acc -: xk else acc) bj (zip xs (drop (j+1) aj))
+        aj' = [IS.member i aj | i <- [0 ..]]
+        xj = foldl (\ acc (xk,ak) -> if ak then acc -: xk else acc) bj (zip xs (drop (j+1) aj'))
         xs' = xj : xs
       
+unpermute :: Ord b1 => [b1] -> [b] -> [b]
 unpermute ps xs =
   map fst sorted
   where 
-    c (x0,p0) (x1,p1) = compare p0 p1
+    c (_, p0) (_, p1) = compare p0 p1
     sorted = sortBy c (zip xs ps)
 
 solve :: RhsC rhs => System rhs -> System rhs
 solve s = 
   case toR (Ok s) of
     Ok s'     -> s' { sS = Just (unpermute (sP s) (backSubstitute s')) }
-    Stuck s i -> s 
+    Stuck s' _ -> s'
       
   
 addRow :: System rhs -> Row -> rhs -> System rhs
 addRow s r b = s { 
-  sA = (sA s) ++ [r],
-  sB = (sB s) ++ [b],
-  sR = (sR s) + 1,
-  sP = (sP s) ++ [(sR s)],
+  sA = sA s ++ [r],
+  sB = sB s ++ [b],
+  sR = sR s + 1,
+  sP = sP s ++ [sR s],
   sN = 0}
-                   
-
-
