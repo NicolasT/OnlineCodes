@@ -13,46 +13,37 @@ import Data.Char(chr,ord)
 
 import Rhs
 
+import Data.Word (Word8)
+
+import Data.Vector.Unboxed (Vector)
+import qualified Data.Vector.Unboxed as UV
 
 
 
-data MB = MB String
+newtype MB = MB (Vector Word8)
+unMB :: MB -> Vector Word8
+unMB (MB v) = v
 
-showMB :: MB -> String
-showMB (MB mb) = 
-  "< " ++ (summ mb) ++ "> " 
-  where 
-    summ [] = " 0"
-    summ (x : r) = show x ++ " ..." ++ show (length mb)
-
-xorMB :: MB -> MB -> MB
-xorMB (MB a) (MB b) = MB (zipWith xorC a b)
-  where xorC ca cb = chr ((ord ca) `xor` (ord cb))
-
-c0 = chr 0
 zeroMB :: Int -> MB
-zeroMB n = MB (replicate n c0)
-
-_rconvert :: String -> MB
-_rconvert mb = MB (reverse mb)
-
-_split :: Int -> [MB] -> String -> Int -> String -> [MB]
-_split bs acc cb i  []                = reverse (rcb : acc)          where rcb = _rconvert cb
-_split bs acc cb i (c : t)  | i == bs = _split bs (rcb:acc) [c] 1  t where rcb = _rconvert cb
-_split bs acc cb i (c : t)            = _split bs     acc            (c:cb)  (i+1) t
+zeroMB n = MB (UV.replicate n 0)
 
 splitInMBs :: Int -> String -> [MB]
-splitInMBs bs = _split bs [] [] 0
+splitInMBs bs = loop []
+  where
+    loop acc s | null s = reverse acc
+               | otherwise = loop (MB (UV.fromList $ map (fromIntegral . ord) h) : acc) t
+      where
+        (h, t) = splitAt bs s
+
 
 combineMBs :: [MB] -> Int -> String
-combineMBs mbs n = 
-  x
-    where 
-      (x,_) = foldl (\ (acc,i) (MB mb) -> if i < n then (acc ++ mb, i+1) else (acc,i+1)) 
-              ("",0) mbs
+combineMBs mbs n = concatMap (map (chr . fromIntegral) . UV.toList . unMB) $ take n mbs
 
 instance Show MB where
-  show = showMB
+  show (MB v) = "MB <" ++ show (UV.length v) ++ " * '" ++ show (UV.head v) ++ "'>"
   
 instance RhsC MB where
   (-:) = xorMB
+
+xorMB :: MB -> MB -> MB
+xorMB (MB va) (MB vb) = MB $ UV.zipWith xor va vb
